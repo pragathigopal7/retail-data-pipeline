@@ -22,3 +22,10 @@ jobs:
       - run: pytest -q
       - name: End to end run with quality gates
         run: retail-pipeline --lake /tmp/lake run --orders 5000
+      - name: Re-run is a no-op, full refresh still passes the gates
+        run: |
+          retail-pipeline --lake /tmp/lake transform | tee /tmp/transform.txt
+          grep -q "mode=noop" /tmp/transform.txt
+          retail-pipeline --lake /tmp/lake transform --full-refresh
+          retail-pipeline --lake /tmp/lake check
+          retail-pipeline --lake /tmp/lake quality-history

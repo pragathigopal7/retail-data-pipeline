@@ -1,7 +1,10 @@
+-- materialized: incremental
+-- unique_key: order_id
+--
 -- One row per order with its current state. Current status is decided by
 -- event time, not arrival time, so a late PAID event can never overwrite a
--- DELIVERED order. Ties on event_ts fall back to lifecycle rank.
-CREATE OR REPLACE TABLE silver_orders AS
+-- DELIVERED order. Ties on event_ts fall back to lifecycle rank. Only orders
+-- touched by new events are rebuilt.
 WITH ranked AS (
     SELECT
         *,
@@ -10,6 +13,7 @@ WITH ranked AS (
             WHEN 'DELIVERED' THEN 4 WHEN 'CANCELLED' THEN 5 WHEN 'REFUNDED' THEN 6
         END AS status_rank
     FROM silver_order_events
+    WHERE order_id IN (SELECT order_id FROM changed_order_id)
 )
 SELECT
     order_id,
@@ -25,7 +29,12 @@ SELECT
     MIN(event_ts)                                            AS first_event_at,
     MAX(event_ts)                                            AS last_event_at,
     ARG_MIN(order_total, event_ts)                           AS order_total,
+    COALESCE(ARG_MIN(discount_total, event_ts), 0)           AS discount_total,
+    -- v1 events have no payment method; take it from any v2 event of the order
+    ARG_MIN(payment_method, event_ts) FILTER (WHERE payment_method IS NOT NULL)
+                                                             AS payment_method,
+    MAX(source_schema_version)                               AS source_schema_version,
     ARG_MIN(items_json, event_ts)                            AS items_json,
     COUNT(*)                                                 AS event_count
 FROM ranked
-GROUP BY order_id;
+GROUP BY order_id

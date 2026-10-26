@@ -4,6 +4,10 @@ Valid events go to bronze/order_events, partitioned by event date. Invalid
 events go to the dead letter queue with the validation error, so they can be
 inspected and replayed after the producer is fixed. Offsets are committed only
 after both writes succeed.
+
+Events are validated against the contract version the producer declared and
+upcast to the latest version, so bronze has a single shape. The declared version
+is kept in `source_schema_version` so a producer rollout can be tracked.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import ValidationError
 
-from .schemas import OrderEvent
+from .schemas import REGISTRY, OrderEvent, validate_event
 from .sources import Source
 
 log = logging.getLogger(__name__)
@@ -36,7 +40,10 @@ BRONZE_SCHEMA = pa.schema(
         ("currency", pa.string()),
         ("items_json", pa.string()),
         ("order_total", pa.decimal128(12, 2)),
+        ("discount_total", pa.decimal128(12, 2)),
+        ("payment_method", pa.string()),
         ("schema_version", pa.int32()),
+        ("source_schema_version", pa.int32()),
         ("source", pa.string()),
         ("source_offset", pa.int64()),
         ("ingested_at", pa.timestamp("us", tz="UTC")),
@@ -64,7 +71,9 @@ class IngestStats:
     errors_by_type: dict[str, int] = field(default_factory=dict)
 
 
-def _bronze_row(event: OrderEvent, source: str, offset: int, now: datetime) -> dict:
+def _bronze_row(
+    event: OrderEvent, declared_version: int, source: str, offset: int, now: datetime
+) -> dict:
     ts = event.event_ts.astimezone(timezone.utc)
     return {
         "event_id": event.event_id,
@@ -77,7 +86,10 @@ def _bronze_row(event: OrderEvent, source: str, offset: int, now: datetime) -> d
         "currency": event.currency,
         "items_json": json.dumps([i.model_dump(mode="json") for i in event.items]),
         "order_total": event.order_total,
+        "discount_total": event.discount_total,
+        "payment_method": event.payment_method.value if event.payment_method else None,
         "schema_version": event.schema_version,
+        "source_schema_version": declared_version,
         "source": source,
         "source_offset": offset,
         "ingested_at": now,
@@ -85,9 +97,18 @@ def _bronze_row(event: OrderEvent, source: str, offset: int, now: datetime) -> d
     }
 
 
+_VERSION_TAGS = {str(v) for v in REGISTRY}
+
+
 def _summarize(err: ValidationError) -> str:
+    """First error as `field.path: message`, without the union's version tag prefix."""
     first = err.errors()[0]
-    loc = ".".join(str(p) for p in first["loc"]) or "<root>"
+    if first["type"] == "unsupported_schema_version":
+        return f"schema_version: {first['msg']}"
+    parts = [str(p) for p in first["loc"]]
+    if parts and parts[0] in _VERSION_TAGS:
+        parts = parts[1:]
+    loc = ".".join(parts) or "<root>"
     return f"{loc}: {first['msg']}"
 
 
@@ -103,8 +124,8 @@ def ingest(source: Source, lake_dir: str | Path, batch_size: int = 500) -> Inges
         for offset, raw in batch:
             stats.read += 1
             try:
-                event = OrderEvent.model_validate_json(raw)
-                good.append(_bronze_row(event, source.name, offset, now))
+                event, declared = validate_event(raw)
+                good.append(_bronze_row(event, declared, source.name, offset, now))
             except ValidationError as err:
                 reason = _summarize(err)
                 field_name = reason.split(":")[0]

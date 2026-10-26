@@ -2,9 +2,11 @@
 
     retail-pipeline generate --orders 5000 --out data/events.jsonl
     retail-pipeline ingest   --file data/events.jsonl
-    retail-pipeline transform
+    retail-pipeline transform                       # incremental since the last run
+    retail-pipeline transform --full-refresh        # rebuild everything from bronze
     retail-pipeline check
-    retail-pipeline run      --orders 5000          # all of the above
+    retail-pipeline quality-history                 # recent quality runs
+    retail-pipeline run      --orders 5000          # generate, ingest, transform, check
 
 Kafka mode:
     retail-pipeline produce --orders 5000 --bootstrap localhost:19092
@@ -20,9 +22,9 @@ from pathlib import Path
 
 from .generator import generate_events, write_jsonl
 from .ingest import ingest
-from .quality import failed, run_checks
+from .quality import failed, history, run_checks
 from .sources import FileSource, KafkaSource, produce_to_kafka
-from .transform import run_models
+from .transform import run_transform
 
 TOPIC = "retail.orders.v1"
 
@@ -55,7 +57,12 @@ def _cmd_ingest(a: argparse.Namespace) -> int:
 
 
 def _cmd_transform(a: argparse.Namespace) -> int:
-    for table, rows in run_models(a.lake).items():
+    r = run_transform(a.lake, full_refresh=getattr(a, "full_refresh", False))
+    print(
+        f"transform: mode={r.mode} new_events={r.new_events} "
+        f"changed_orders={r.changed_orders} changed_days={r.changed_dates}"
+    )
+    for table, rows in r.counts.items():
         print(f"  {table:<28} {rows:>8} rows")
     return 0
 
@@ -67,6 +74,17 @@ def _cmd_check(a: argparse.Namespace) -> int:
     if failed(results):
         print(f"{len(failed(results))} blocking check(s) failed", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cmd_history(a: argparse.Namespace) -> int:
+    rows = history(a.lake, limit=a.limit)
+    if not rows:
+        print("no quality runs recorded yet")
+        return 0
+    print(f"{'run_id':<14}{'run_at (UTC)':<21}{'checks':>7}{'passed':>8}{'warn':>6}{'fail':>6}")
+    for run_id, run_at, checks, passed, warns, fails in rows:
+        print(f"{run_id:<14}{run_at:<21}{checks:>7}{passed:>8}{warns:>6}{fails:>6}")
     return 0
 
 
@@ -108,12 +126,19 @@ def build_parser() -> argparse.ArgumentParser:
     i.add_argument("--batch-size", type=int, default=500)
     i.set_defaults(fn=_cmd_ingest)
 
-    t = sub.add_parser("transform", help="build silver and gold models")
+    t = sub.add_parser("transform", help="build silver and gold models (incremental)")
+    t.add_argument(
+        "--full-refresh", action="store_true", help="ignore the watermark and rebuild everything"
+    )
     t.set_defaults(fn=_cmd_transform)
 
     c = sub.add_parser("check", help="run data quality gates")
     c.add_argument("--max-dlq-ratio", type=float, default=0.05)
     c.set_defaults(fn=_cmd_check)
+
+    h = sub.add_parser("quality-history", help="show recent data quality runs")
+    h.add_argument("--limit", type=int, default=10)
+    h.set_defaults(fn=_cmd_history)
 
     r = sub.add_parser("run", help="generate, ingest, transform and check end to end")
     r.add_argument("--orders", type=int, default=5000)
