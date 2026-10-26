@@ -1,5 +1,6 @@
+-- materialized: table
+--
 -- Fulfillment speed per store: hours from placement to delivery.
-CREATE OR REPLACE TABLE gold_fulfillment_sla AS
 SELECT
     store_id,
     COUNT(*)                                                                         AS delivered_orders,
@@ -10,4 +11,4 @@ SELECT
 FROM silver_orders
 WHERE placed_at IS NOT NULL AND delivered_at IS NOT NULL
 GROUP BY store_id
-ORDER BY store_id;
+ORDER BY store_id

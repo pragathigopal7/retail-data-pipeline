@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "retail-data-pipeline"
-version = "0.1.0"
-description = "Streaming retail orders pipeline: Kafka ingestion, medallion lakehouse on Parquet + DuckDB, and data quality gates."
+version = "0.2.0"
+description = "Streaming retail orders pipeline: Kafka ingestion with versioned contracts, incremental medallion lakehouse on Parquet + DuckDB, and data quality gates with metrics."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Pragathi Gopal" }]
