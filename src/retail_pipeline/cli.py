@@ -3,7 +3,7 @@
     retail-pipeline generate --orders 5000 --out data/events.jsonl
     retail-pipeline ingest   --file data/events.jsonl
     retail-pipeline transform
-    retail-pipeline check
+    retail-pipeline check    --report lake/quality.json
     retail-pipeline run      --orders 5000          # all of the above
 
 Kafka mode:
@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .generator import generate_events, write_jsonl
 from .ingest import ingest
-from .quality import failed, run_checks
+from .quality import failed, run_checks, write_report
 from .sources import FileSource, KafkaSource, produce_to_kafka
 from .transform import run_models
 
@@ -64,6 +64,8 @@ def _cmd_check(a: argparse.Namespace) -> int:
     results = run_checks(a.lake, max_dlq_ratio=a.max_dlq_ratio)
     for r in results:
         print(r)
+    if getattr(a, "report", None):
+        print(f"wrote quality report to {write_report(results, a.report)}")
     if failed(results):
         print(f"{len(failed(results))} blocking check(s) failed", file=sys.stderr)
         return 1
@@ -113,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     c = sub.add_parser("check", help="run data quality gates")
     c.add_argument("--max-dlq-ratio", type=float, default=0.05)
+    c.add_argument("--report", metavar="PATH", help="also write results as JSON")
     c.set_defaults(fn=_cmd_check)
 
     r = sub.add_parser("run", help="generate, ingest, transform and check end to end")
@@ -120,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--seed", type=int, default=42)
     r.add_argument("--batch-size", type=int, default=500)
     r.add_argument("--max-dlq-ratio", type=float, default=0.05)
+    r.add_argument("--report", metavar="PATH", help="also write quality results as JSON")
     r.set_defaults(fn=_cmd_run)
     return p
 

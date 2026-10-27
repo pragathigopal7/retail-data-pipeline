@@ -63,6 +63,8 @@ ingest: read=19365 valid=18959 dlq=406 batches=39
 [PASS] dead letter ratio within budget: 0.021 ratio
 ```
 
+Add `--report lake/quality.json` to `run` or `check` to also write every gate's status, observed value and threshold as JSON, ready for CI artifacts or a metrics exporter.
+
 The `WARN` is expected: it flags orders whose `SHIPPED` event was malformed and sent to the DLQ, which is exactly the kind of gap an on call engineer would want surfaced.
 
 ### With Kafka (Redpanda)
@@ -125,7 +127,7 @@ The suite covers the schema contract, generator determinism, DLQ routing, checkp
 
 * Swap the batch transform for incremental models keyed on `ingested_at`
 * Register schemas in a schema registry and evolve to `schema_version` 2
-* Orchestrate with Airflow or Dagster and publish quality results as metrics
+* Orchestrate with Airflow or Dagster and push the JSON quality report to a metrics backend
 
 ## License
 

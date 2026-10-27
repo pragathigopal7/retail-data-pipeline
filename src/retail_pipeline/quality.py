@@ -7,7 +7,9 @@ reported but do not block. Thresholded checks compare a ratio instead.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .transform import connect
@@ -31,6 +33,22 @@ class CheckResult:
         mark = "PASS" if self.passed else ("FAIL" if self.check.severity == "error" else "WARN")
         unit = "ratio" if self.check.max_ratio is not None else "rows"
         return f"[{mark}] {self.check.name}: {self.observed:g} {unit}"
+
+    @property
+    def status(self) -> str:
+        if self.passed:
+            return "pass"
+        return "fail" if self.check.severity == "error" else "warn"
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.check.name,
+            "severity": self.check.severity,
+            "status": self.status,
+            "observed": self.observed,
+            "unit": "ratio" if self.check.max_ratio is not None else "rows",
+            "threshold": self.check.max_ratio if self.check.max_ratio is not None else 0,
+        }
 
 
 CHECKS: list[Check] = [
@@ -113,3 +131,18 @@ def run_checks(lake_dir: str | Path, max_dlq_ratio: float = 0.05) -> list[CheckR
 
 def failed(results: list[CheckResult]) -> list[CheckResult]:
     return [r for r in results if not r.passed and r.check.severity == "error"]
+
+
+def write_report(results: list[CheckResult], path: str | Path) -> Path:
+    """Write check results as JSON so CI or a metrics exporter can consume them."""
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    statuses = [r.status for r in results]
+    report = {
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "passed": not failed(results),
+        "summary": {s: statuses.count(s) for s in ("pass", "warn", "fail")},
+        "checks": [r.to_dict() for r in results],
+    }
+    out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return out

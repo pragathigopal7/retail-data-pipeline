@@ -1,9 +1,11 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import duckdb
 import pytest
 from pydantic import ValidationError
 
+from retail_pipeline.cli import main
 from retail_pipeline.generator import FaultRates, generate_events, write_jsonl
 from retail_pipeline.ingest import ingest
 from retail_pipeline.quality import failed, run_checks
@@ -162,3 +164,18 @@ def test_dlq_budget_blocks_bad_feed(tmp_path):
     run_models(lake)
     names = [r.check.name for r in failed(run_checks(lake, max_dlq_ratio=0.05))]
     assert "dead letter ratio within budget" in names
+
+
+def test_check_writes_json_report(tmp_path):
+    bad_feed = [make_event("PLACED", i, event_id=f"evt-{i:05d}", channel="fax") for i in range(20)]
+    lake, _ = run_file(tmp_path, [make_event("PLACED", 0), *bad_feed])
+    run_models(lake)
+    report_path = tmp_path / "reports" / "quality.json"
+    code = main(["--lake", str(lake), "check", "--report", str(report_path)])
+    report = json.loads(report_path.read_text())
+    assert code == 1 and report["passed"] is False
+    by_name = {c["name"]: c for c in report["checks"]}
+    dlq = by_name["dead letter ratio within budget"]
+    assert dlq["status"] == "fail" and dlq["unit"] == "ratio" and dlq["threshold"] == 0.05
+    assert report["summary"]["fail"] >= 1
+    assert sum(report["summary"].values()) == len(report["checks"])

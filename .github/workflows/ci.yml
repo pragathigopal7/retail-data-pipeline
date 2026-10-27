@@ -21,4 +21,11 @@ jobs:
       - run: ruff check src tests && ruff format --check src tests
       - run: pytest -q
       - name: End to end run with quality gates
-        run: retail-pipeline --lake /tmp/lake run --orders 5000
+        run: retail-pipeline --lake /tmp/lake run --orders 5000 --report /tmp/lake/quality.json
+      - name: Upload quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report-py${{ matrix.python-version }}
+          path: /tmp/lake/quality.json
+          if-no-files-found: ignore
